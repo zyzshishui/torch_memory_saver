@@ -139,9 +139,6 @@ namespace ROCmHIPImplementation {
         std::unordered_map<void*, AllocationMetadata>& allocation_metadata,
         std::mutex& allocator_metadata_mutex
     ) {
-        // Get device
-        CURESULT_CHECK(hipCtxGetDevice(&device));
-
         // Calculate aligned size
         hipMemAllocationProp prop = {};
         prop.type = hipMemAllocationTypePinned;

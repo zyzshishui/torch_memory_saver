@@ -166,9 +166,9 @@ namespace CUDAUtils {
         }
 
         static CUdevice cu_ctx_get_device() {
-            CUdevice ans;
-            CURESULT_CHECK(hipCtxGetDevice(&ans));
-            return ans;
+            int device;
+            CUDA_ERROR_CHECK(hipGetDevice(&device));
+            return static_cast<CUdevice>(device);
         }
 
         static CUdevice cu_device_get(int device_ordinal) {
