@@ -30,6 +30,7 @@
 #define cudaMemcpy hipMemcpy
 // --- Memory Copy Direction Constants ---
 #define cudaMemcpyDeviceToHost hipMemcpyDeviceToHost
+#define cudaMemcpyHostToDevice hipMemcpyHostToDevice
 // --- Device and Stream Types ---
 #define CUdevice hipDevice_t
 #define cudaStream_t hipStream_t
@@ -38,6 +39,15 @@
 #define MEMCREATE_CHUNK_SIZE (2 * 1024 * 1024)
 // --- Utility Macros ---
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+// --- ROCm Version Feature Flags ---
+// ROCm 6.x has hipMemCreate bug, requires chunked allocation workaround
+// ROCm 7.0+ has fixed the bug, can use non-chunked allocation like CUDA
+#if HIP_VERSION < 70000000
+    #define TMS_ROCM_LEGACY_CHUNKED 1
+#else
+    #define TMS_ROCM_LEGACY_CHUNKED 0
+#endif
 
 // ============================================================================
 // CUDA Platform Configuration (NVIDIA GPUs)

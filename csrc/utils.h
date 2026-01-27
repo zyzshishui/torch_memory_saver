@@ -60,10 +60,73 @@ namespace CUDAUtils {
     #if HIP_VERSION < 60304000 // rocm/hip 6.3.4
         #pragma message "You need to implement torch_memory_saver in ROCm/HIP 6.3.4 or lower. We did not support it currently."
     #else
-        // After rocm-7.0, we can use the same way to implement torch_memory_saver as CUDA side. --> Need to verify
-        #pragma message "Using ROCm/HIP >= 6.4.2 implementation"
-        // hipMemCreate currently has issue in rocm-6.3.4. After it is fixed in rocm-7.0, we can use the same way to implement torch_memory_saver as CUDA side.
-        // Current, we based on the chuck-wise method to implement it.
+        #if TMS_ROCM_LEGACY_CHUNKED
+            #pragma message "Using ROCm/HIP 6.x implementation (chunked allocation workaround)"
+        #else
+            #pragma message "Using ROCm/HIP >= 7.0 implementation (single allocation, same as CUDA)"
+        #endif
+
+        // =============================================================================
+        // ROCm 6.3.4-: Chunked Allocation Workaround
+        // =============================================================================
+        
+        static size_t cu_mem_get_granularity(hipDevice_t device) {
+            hipMemAllocationProp prop = {};
+            prop.type = hipMemAllocationTypePinned;
+            prop.location.type = hipMemLocationTypeDevice;
+            prop.location.id = device;
+
+            size_t granularity;
+            CURESULT_CHECK(hipMemGetAllocationGranularity(&granularity, &prop, hipMemAllocationGranularityMinimum));
+            return granularity;
+        }
+
+        static CUdevice cu_ctx_get_device() {
+            int device;
+            CUDA_ERROR_CHECK(hipGetDevice(&device));
+            return static_cast<CUdevice>(device);
+        }
+
+        static CUdevice cu_device_get(int device_ordinal) {
+            CUdevice ans;
+            CURESULT_CHECK(hipDeviceGet(&ans, device_ordinal));
+            return ans;
+        }
+
+        // =============================================================================
+        // ROCm 7.0+: Single allocation (same as CUDA)
+        // =============================================================================
+
+        static cudaError_t cu_mem_create(hipMemGenericAllocationHandle_t *alloc_handle, size_t size, hipDevice_t device) {
+            hipMemAllocationProp prop = {};
+            prop.type = hipMemAllocationTypePinned;
+            prop.location.type = hipMemLocationTypeDevice;
+            prop.location.id = device;
+            prop.allocFlags.compressionType = 0x0;
+
+            hipError_t ret = hipMemCreate(alloc_handle, size, &prop, 0);
+            if (ret == hipErrorOutOfMemory) {
+                std::cerr << "[torch_memory_saver.cpp] hipMemCreate hipErrorOutOfMemory (may not be an issue e.g. torch allocator will free cache and retry)" << std::endl;
+                return hipErrorOutOfMemory;
+            }
+            CURESULT_CHECK(ret);
+
+            return hipSuccess;
+        }
+
+        static void cu_mem_set_access(void *ptr, size_t size, hipDevice_t device) {
+            hipMemAccessDesc accessDesc = {};
+            accessDesc.location.type = hipMemLocationTypeDevice;
+            accessDesc.location.id = device;
+            accessDesc.flags = hipMemAccessFlagsProtReadWrite;
+            CURESULT_CHECK(hipMemSetAccess(ptr, size, &accessDesc, 1));
+        }
+
+        #if TMS_ROCM_LEGACY_CHUNKED
+        // =============================================================================
+        // ROCm 6.x: Chunked allocation workaround for hipMemCreate bug
+        // =============================================================================
+
         static void cu_mem_create_and_map(hipDevice_t device, 
                                           size_t aligned_size, 
                                           void* d_mem,
@@ -75,15 +138,6 @@ namespace CUDAUtils {
             prop.location.type = hipMemLocationTypeDevice;
             prop.location.id = device;
 
-            // // Get granularity
-            // size_t granularity;
-            // CURESULT_CHECK(hipMemGetAllocationGranularity(&granularity, &prop,
-            //             hipMemAllocationGranularityMinimum));
-
-            // // Make sure chunk size is aligned with hardware granularity
-            // size_t aligned_chunk_size = ((MEMCREATE_CHUNK_SIZE + granularity - 1) / granularity) * granularity;
-            // size_t num_chunks = (size + aligned_chunk_size - 1) / aligned_chunk_size;
-            
             // Get granularity, Make sure chunk size is aligned with hardware granularity
             // size == aligned_size  
             size_t num_chunks = (aligned_size + MEMCREATE_CHUNK_SIZE - 1) / MEMCREATE_CHUNK_SIZE;
@@ -93,7 +147,6 @@ namespace CUDAUtils {
 
             // Calculate chunk sizes
             for (size_t i = 0; i < num_chunks; ++i) {
-                // chunk_sizes[i] = MIN(size - i * aligned_chunk_size, aligned_chunk_size);
                 chunk_sizes[i] = MIN(aligned_size - i * MEMCREATE_CHUNK_SIZE, MEMCREATE_CHUNK_SIZE);
 #ifdef TMS_DEBUG_LOG
                 std::cout << "[torch_memory_saver.cpp] chunk_sizes[" << i << "] = " << chunk_sizes[i] << std::endl;
@@ -154,28 +207,7 @@ namespace CUDAUtils {
             }
         }
 
-        static size_t cu_mem_get_granularity(hipDevice_t device) {
-            hipMemAllocationProp prop = {};
-            prop.type = hipMemAllocationTypePinned;
-            prop.location.type = hipMemLocationTypeDevice;
-            prop.location.id = device;
-
-            size_t granularity;
-            CURESULT_CHECK(hipMemGetAllocationGranularity(&granularity, &prop, hipMemAllocationGranularityMinimum));
-            return granularity;
-        }
-
-        static CUdevice cu_ctx_get_device() {
-            int device;
-            CUDA_ERROR_CHECK(hipGetDevice(&device));
-            return static_cast<CUdevice>(device);
-        }
-
-        static CUdevice cu_device_get(int device_ordinal) {
-            CUdevice ans;
-            CURESULT_CHECK(hipDeviceGet(&ans, device_ordinal));
-            return ans;
-        }
+        #endif // TMS_ROCM_LEGACY_CHUNKED
     #endif
 
 #elif defined(USE_CUDA)

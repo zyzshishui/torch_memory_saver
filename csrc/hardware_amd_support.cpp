@@ -9,7 +9,11 @@
 #if HIP_VERSION < 60304000
     #pragma message "You need to implement torch_memory_saver in ROCm/HIP 6.3.4 or lower. We did not support it currently."
 #else
-    #pragma message "Using ROCm/HIP >= 6.4.2 implementation"
+    #if TMS_ROCM_LEGACY_CHUNKED
+        #pragma message "Using ROCm/HIP 6.x implementation (chunked allocation workaround)"
+    #else
+        #pragma message "Using ROCm/HIP >= 7.0 implementation (single allocation, same as CUDA)"
+    #endif
 
 namespace DeviceUtils {
     int get_global_device_id(hipDevice_t local_device_id) {
@@ -48,7 +52,10 @@ namespace DeviceUtils {
     }
 }
 
-// Internal helper functions
+#if TMS_ROCM_LEGACY_CHUNKED
+// =============================================================================
+// ROCm 6.x: Internal helper functions for chunked allocation
+// =============================================================================
 namespace {
     void cu_mem_create_and_map(
         hipDevice_t device, 
@@ -129,8 +136,15 @@ namespace {
         }
     }
 }
+#endif // TMS_ROCM_LEGACY_CHUNKED
 
 namespace ROCmHIPImplementation {
+
+#if TMS_ROCM_LEGACY_CHUNKED
+    // =============================================================================
+    // ROCm 6.x: Chunked allocation workaround for hipMemCreate bug
+    // =============================================================================
+
     cudaError_t rocm_malloc(
         void **ptr, 
         CUdevice device, 
@@ -165,7 +179,7 @@ namespace ROCmHIPImplementation {
         }
 
 #ifdef TMS_DEBUG_LOG
-        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.cuda_malloc "
+        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.cuda_malloc (ROCm 6.x chunked)"
                   << " ptr=" << ptr << " size=" << size
                   << " granularity=" << granularity
                   << " aligned_size=" << aligned_size
@@ -197,7 +211,7 @@ namespace ROCmHIPImplementation {
 
 #ifdef TMS_DEBUG_LOG
         size_t num_chunks = allocation_metadata[*ptr].allocHandles.size();
-        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.cuda_malloc "
+        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.cuda_malloc (ROCm 6.x chunked)"
                   << " ptr=" << ptr << " *ptr=" << *ptr << " size=" << size
                   << " aligned_size=" << aligned_size
                   << " num_chunks=" << num_chunks
@@ -235,7 +249,7 @@ namespace ROCmHIPImplementation {
         }
 
 #ifdef TMS_DEBUG_LOG
-        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.cuda_free "
+        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.cuda_free (ROCm 6.x chunked)"
                   << " ptr=" << ptr << " size=" << metadata.size
                   << " aligned_size=" << metadata.aligned_size
                   << " num_chunks=" << metadata.allocHandles.size()
@@ -283,7 +297,7 @@ namespace ROCmHIPImplementation {
             metadata.state = AllocationState::PAUSED;
 
 #ifdef TMS_DEBUG_LOG
-            std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.pause"
+            std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.pause (ROCm 6.x chunked)"
                     << " ptr=" << ptr << " size=" << metadata.size 
                     << " aligned_size=" << metadata.aligned_size
                     << " num_chunks=" << metadata.allocHandles.size()
@@ -329,7 +343,7 @@ namespace ROCmHIPImplementation {
             metadata.state = AllocationState::ACTIVE;
 
 #ifdef TMS_DEBUG_LOG
-            std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.resume"
+            std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.resume (ROCm 6.x chunked)"
                     << " ptr=" << ptr << " size=" << metadata.size
                     << " aligned_size=" << metadata.aligned_size
                     << " num_chunks=" << metadata.allocHandles.size()
@@ -339,6 +353,189 @@ namespace ROCmHIPImplementation {
 #endif
         }
     }
+
+#else
+    // =============================================================================
+    // ROCm 7.0+: Single allocation (same as CUDA)
+    // =============================================================================
+
+    cudaError_t rocm_malloc(
+        void **ptr, 
+        CUdevice device, 
+        size_t size, 
+        const std::string& tag, 
+        bool enable_cpu_backup,
+        std::unordered_map<void*, AllocationMetadata>& allocation_metadata,
+        std::mutex& allocator_metadata_mutex
+    ) {
+        hipMemGenericAllocationHandle_t allocHandle;
+
+        cudaError_t ret = CUDAUtils::cu_mem_create(&allocHandle, size, device);
+        if (ret != cudaSuccess) {
+            return ret;
+        }
+
+        CURESULT_CHECK(hipMemAddressReserve((hipDeviceptr_t *)ptr, size, 0, 0, 0));
+        CURESULT_CHECK(hipMemMap((hipDeviceptr_t)*ptr, size, 0, allocHandle, 0));
+        CUDAUtils::cu_mem_set_access(*ptr, size, device);
+
+        {
+            const std::lock_guard<std::mutex> lock(allocator_metadata_mutex);
+            allocation_metadata.emplace(
+                *ptr,
+                AllocationMetadata{size, device, tag, AllocationState::ACTIVE, enable_cpu_backup, nullptr, size, allocHandle}
+            );
+        }
+
+#ifdef TMS_DEBUG_LOG
+        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.malloc (ROCm 7.0+)"
+                  << " ptr=" << ptr << " *ptr=" << *ptr << " size=" << size
+                  << " allocHandle=" << allocHandle << " tag=" << tag
+                  << std::endl;
+#endif
+
+        return cudaSuccess;
+    }
+
+    cudaError_t rocm_free(
+        void *ptr,
+        std::unordered_map<void*, AllocationMetadata>& allocation_metadata,
+        std::mutex& allocator_metadata_mutex
+    ) {
+        AllocationMetadata metadata;
+        {
+            const std::lock_guard<std::mutex> lock(allocator_metadata_mutex);
+            // If the pointer was not allocated by us, fall back to real hipFree
+            if (allocation_metadata.count(ptr) == 0) {
+                return APIForwarder::call_real_cuda_free(ptr);
+            }
+            metadata = std::move(allocation_metadata[ptr]);
+            allocation_metadata.erase(ptr);
+        }
+
+        CUDA_ERROR_CHECK(hipDeviceSynchronize());
+
+        CURESULT_CHECK(hipMemUnmap((hipDeviceptr_t)ptr, metadata.size));
+        CURESULT_CHECK(hipMemRelease(metadata.allocHandle));
+        CURESULT_CHECK(hipMemAddressFree((hipDeviceptr_t)ptr, metadata.size));
+
+        if (nullptr != metadata.cpu_backup) {
+            CUDA_ERROR_CHECK(hipFreeHost(metadata.cpu_backup));
+            metadata.cpu_backup = nullptr;
+        }
+
+#ifdef TMS_DEBUG_LOG
+        std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.free (ROCm 7.0+)"
+                  << " ptr=" << ptr << " size=" << metadata.size
+                  << " allocHandle=" << metadata.allocHandle << " tag=" << metadata.tag
+                  << std::endl;
+#endif
+
+        return cudaSuccess;
+    }
+
+    void rocm_pause(
+        const std::string& tag,
+        std::unordered_map<void*, AllocationMetadata>& allocation_metadata,
+        std::mutex& allocator_metadata_mutex
+    ) {
+        const std::lock_guard<std::mutex> lock(allocator_metadata_mutex);
+
+        for (auto it = allocation_metadata.begin(); it != allocation_metadata.end(); ++it) {
+            void *ptr = it->first;
+            AllocationMetadata &metadata = it->second;
+
+            if (!tag.empty() && metadata.tag != tag) {
+                continue;
+            }
+
+            if (metadata.state != AllocationState::ACTIVE) {
+                std::cerr << "[torch_memory_saver.cpp] Cannot pause allocation that is not active."
+                          << " tag=" << metadata.tag << " ptr=" << std::to_string((uintptr_t)ptr)
+                          << " file=" << __FILE__ << " func=" << __func__ << " line=" << __LINE__
+                          << std::endl;
+                exit(1);
+            }
+
+            if (metadata.enable_cpu_backup) {
+                if (nullptr == metadata.cpu_backup) {
+                    CUDA_ERROR_CHECK(hipMallocHost(&metadata.cpu_backup, metadata.size));
+                }
+                SIMPLE_CHECK(metadata.cpu_backup != nullptr, "cpu_backup should not be nullptr");
+                CUDA_ERROR_CHECK(cudaMemcpy(metadata.cpu_backup, ptr, metadata.size, hipMemcpyDeviceToHost));
+            }
+
+            CURESULT_CHECK(hipMemUnmap((hipDeviceptr_t)ptr, metadata.size));
+            CURESULT_CHECK(hipMemRelease(metadata.allocHandle));
+
+            metadata.state = AllocationState::PAUSED;
+
+#ifdef TMS_DEBUG_LOG
+            std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.pause (ROCm 7.0+)"
+                      << " ptr=" << ptr << " size=" << metadata.size 
+                      << " allocHandle=" << metadata.allocHandle
+                      << " tag=" << metadata.tag << " filter_tag=" << tag
+                      << " enable_cpu_backup=" << metadata.enable_cpu_backup
+                      << std::endl;
+#endif
+        }
+    }
+
+    void rocm_resume(
+        const std::string& tag,
+        std::unordered_map<void*, AllocationMetadata>& allocation_metadata,
+        std::mutex& allocator_metadata_mutex
+    ) {
+        const std::lock_guard<std::mutex> lock(allocator_metadata_mutex);
+
+        for (auto it = allocation_metadata.begin(); it != allocation_metadata.end(); ++it) {
+            void *ptr = it->first;
+            AllocationMetadata &metadata = it->second;
+
+            if (!tag.empty() && metadata.tag != tag) {
+                continue;
+            }
+
+            if (metadata.state != AllocationState::PAUSED) {
+                std::cerr << "[torch_memory_saver.cpp] Cannot resume allocation that is not paused. "
+                          << " tag=" << metadata.tag << " ptr=" << std::to_string((uintptr_t)ptr)
+                          << " file=" << __FILE__ << " func=" << __func__ << " line=" << __LINE__
+                          << std::endl;
+                exit(1);
+            }
+
+            hipMemGenericAllocationHandle_t newAllocHandle;
+            CUDA_ERROR_CHECK(CUDAUtils::cu_mem_create(&newAllocHandle, metadata.size, metadata.device));
+
+            CURESULT_CHECK(hipMemMap((hipDeviceptr_t)ptr, metadata.size, 0, newAllocHandle, 0));
+
+            CUDAUtils::cu_mem_set_access(ptr, metadata.size, metadata.device);
+
+            if (metadata.enable_cpu_backup) {
+                SIMPLE_CHECK(metadata.cpu_backup != nullptr, "cpu_backup should not be nullptr");
+                CUDA_ERROR_CHECK(cudaMemcpy(ptr, metadata.cpu_backup, metadata.size, hipMemcpyHostToDevice));
+
+                CUDA_ERROR_CHECK(hipFreeHost(metadata.cpu_backup));
+                metadata.cpu_backup = nullptr;
+            }
+
+#ifdef TMS_DEBUG_LOG
+            std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.resume (ROCm 7.0+)"
+                      << " ptr=" << ptr << " size=" << metadata.size 
+                      << " (old)allocHandle=" << metadata.allocHandle
+                      << " (new)newAllocHandle=" << newAllocHandle
+                      << " tag=" << metadata.tag << " filter_tag=" << tag
+                      << " enable_cpu_backup=" << metadata.enable_cpu_backup
+                      << std::endl;
+#endif
+
+            metadata.state = AllocationState::ACTIVE;
+            metadata.allocHandle = newAllocHandle;
+        }
+    }
+
+#endif // TMS_ROCM_LEGACY_CHUNKED
+
 }
 
 #endif // HIP_VERSION
