@@ -1,3 +1,4 @@
+import atexit
 import ctypes
 
 import numpy as np
@@ -14,6 +15,22 @@ from .hooks.base import HookUtilBase, HookMode
 logger = logging.getLogger(__name__)
 
 _TAG_DEFAULT = "default"
+
+# Global list to track instances that need cleanup
+_instances_to_cleanup = []
+
+
+def _cleanup_at_exit():
+    """Clean up MemPools before Python exits to avoid issues with ROCm/HIP."""
+    for impl in _instances_to_cleanup:
+        try:
+            if hasattr(impl, '_mem_pools'):
+                impl._mem_pools.clear()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_at_exit)
 
 
 class TorchMemorySaver:
@@ -100,6 +117,8 @@ class _TorchMemorySaverImpl:
         self._binary_wrapper = BinaryWrapper(path_binary=self._hook_util.get_path_binary())
         self._mem_pools = defaultdict(lambda: torch.cuda.MemPool(allocator=self._hook_util.get_allocator()))
         _sanity_checks()
+        # Register for cleanup at exit (needed for ROCm/HIP to avoid crash during MemPool destruction)
+        _instances_to_cleanup.append(self)
 
     @contextmanager
     def region(self, tag: str, enable_cpu_backup: bool):

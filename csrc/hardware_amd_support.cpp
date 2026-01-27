@@ -1,5 +1,6 @@
 #include "hardware_amd_support.h"
 #include "core.h"
+#include "api_forwarder.h"
 
 #if defined(USE_ROCM)
 
@@ -214,7 +215,10 @@ namespace ROCmHIPImplementation {
         AllocationMetadata metadata;
         {
             const std::lock_guard<std::mutex> lock(allocator_metadata_mutex);
-            SIMPLE_CHECK(allocation_metadata.count(ptr), "Trying to free a pointer not allocated here");
+            // If the pointer was not allocated by us, fall back to real hipFree
+            if (allocation_metadata.count(ptr) == 0) {
+                return APIForwarder::call_real_cuda_free(ptr);
+            }
             metadata = std::move(allocation_metadata[ptr]);
             allocation_metadata.erase(ptr);
         }

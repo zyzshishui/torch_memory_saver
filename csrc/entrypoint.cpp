@@ -41,6 +41,31 @@ static thread_local ThreadLocalConfig thread_local_config;
 // ------------------------------------------------- entrypoints :: hook ------------------------------------------------
 
 #ifdef TMS_HOOK_MODE_PRELOAD
+
+#if defined(USE_ROCM)
+// ROCm uses hipMalloc/hipFree instead of cudaMalloc/cudaFree
+hipError_t hipMalloc(void **ptr, size_t size) {
+#ifdef TMS_DEBUG_LOG
+    std::cout << "[torch_memory_saver.cpp] hipMalloc hook called, size=" << size 
+              << " interesting_region=" << thread_local_config.is_interesting_region() << std::endl;
+#endif
+    if (thread_local_config.is_interesting_region()) {
+        return TorchMemorySaver::instance().malloc(
+            ptr, CUDAUtils::cu_ctx_get_device(), size, thread_local_config.current_tag_, thread_local_config.enable_cpu_backup());
+    } else {
+        return APIForwarder::call_real_cuda_malloc(ptr, size);
+    }
+}
+
+hipError_t hipFree(void *ptr) {
+#ifdef TMS_DEBUG_LOG
+    std::cout << "[torch_memory_saver.cpp] hipFree hook called, ptr=" << ptr << std::endl;
+#endif
+    return TorchMemorySaver::instance().free(ptr);
+}
+
+#else
+// CUDA uses cudaMalloc/cudaFree
 cudaError_t cudaMalloc(void **ptr, size_t size) {
     if (thread_local_config.is_interesting_region()) {
         return TorchMemorySaver::instance().malloc(
@@ -53,6 +78,8 @@ cudaError_t cudaMalloc(void **ptr, size_t size) {
 cudaError_t cudaFree(void *ptr) {
     return TorchMemorySaver::instance().free(ptr);
 }
+#endif
+
 #endif
 
 #ifdef TMS_HOOK_MODE_TORCH
@@ -74,9 +101,11 @@ void tms_torch_free(void *ptr, ssize_t ssize, int device, cudaStream_t stream) {
 #ifdef TMS_DEBUG_LOG
     std::cout << "[torch_memory_saver.cpp] entrypoint::tms_torch_free "
               << " ptr=" << ptr << " ssize=" << ssize << " device=" << device << " stream=" << stream
+              << " interesting_region=" << thread_local_config.is_interesting_region()
               << std::endl;
 #endif
-    SIMPLE_CHECK(thread_local_config.is_interesting_region(), "only support interesting region");
+    // Note: Don't check is_interesting_region() here because MemPool destructor
+    // may call free after the region has ended (e.g., during program exit)
     CUDA_ERROR_CHECK(TorchMemorySaver::instance().free(ptr));
 }
 }
