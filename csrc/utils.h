@@ -67,19 +67,8 @@ namespace CUDAUtils {
         #endif
 
         // =============================================================================
-        // ROCm 6.3.4-: Chunked Allocation Workaround
+        // ROCm common utilities
         // =============================================================================
-        
-        static size_t cu_mem_get_granularity(hipDevice_t device) {
-            hipMemAllocationProp prop = {};
-            prop.type = hipMemAllocationTypePinned;
-            prop.location.type = hipMemLocationTypeDevice;
-            prop.location.id = device;
-
-            size_t granularity;
-            CURESULT_CHECK(hipMemGetAllocationGranularity(&granularity, &prop, hipMemAllocationGranularityMinimum));
-            return granularity;
-        }
 
         static CUdevice cu_ctx_get_device() {
             int device;
@@ -121,93 +110,6 @@ namespace CUDAUtils {
             accessDesc.flags = hipMemAccessFlagsProtReadWrite;
             CURESULT_CHECK(hipMemSetAccess(ptr, size, &accessDesc, 1));
         }
-
-        #if TMS_ROCM_LEGACY_CHUNKED
-        // =============================================================================
-        // ROCm 6.x: Chunked allocation workaround for hipMemCreate bug
-        // =============================================================================
-
-        static void cu_mem_create_and_map(hipDevice_t device, 
-                                          size_t aligned_size, 
-                                          void* d_mem,
-                                          std::vector<hipMemGenericAllocationHandle_t>& allocHandles,
-                                          std::vector<size_t>& chunk_sizes) {
-
-            hipMemAllocationProp prop = {};
-            prop.type = hipMemAllocationTypePinned;
-            prop.location.type = hipMemLocationTypeDevice;
-            prop.location.id = device;
-
-            // Get granularity, Make sure chunk size is aligned with hardware granularity
-            // size == aligned_size  
-            size_t num_chunks = (aligned_size + MEMCREATE_CHUNK_SIZE - 1) / MEMCREATE_CHUNK_SIZE;
-
-            allocHandles.resize(num_chunks);
-            chunk_sizes.resize(num_chunks);
-
-            // Calculate chunk sizes
-            for (size_t i = 0; i < num_chunks; ++i) {
-                chunk_sizes[i] = MIN(aligned_size - i * MEMCREATE_CHUNK_SIZE, MEMCREATE_CHUNK_SIZE);
-#ifdef TMS_DEBUG_LOG
-                std::cout << "[torch_memory_saver.cpp] chunk_sizes[" << i << "] = " << chunk_sizes[i] << std::endl;
-#endif
-            }
-
-            // Create memory handles for each chunk
-            for (size_t i = 0; i < num_chunks; ++i) {
-                CURESULT_CHECK(hipMemCreate(&allocHandles[i], chunk_sizes[i], &prop, 0));
-#ifdef TMS_DEBUG_LOG
-                std::cout << "[torch_memory_saver.cpp] allocHandles[" << i << "] = " << allocHandles[i] << std::endl;
-#endif
-            }
-
-            // Map each chunk
-            size_t allocated_size = 0;
-            for (size_t i = 0; i < num_chunks; ++i) {
-                void* map_addr = (void*)((uintptr_t)d_mem + allocated_size);
-                CURESULT_CHECK(hipMemMap((hipDeviceptr_t)map_addr, chunk_sizes[i], 0, allocHandles[i], 0));
-                allocated_size += chunk_sizes[i];
-#ifdef TMS_DEBUG_LOG
-                std::cout << "[torch_memory_saver.cpp] mapped chunk " << i << " at offset " << allocated_size - chunk_sizes[i] << std::endl;
-#endif
-            }
-
-            // Set access permissions
-            hipMemAccessDesc accessDesc = {};
-            accessDesc.location.type = hipMemLocationTypeDevice;
-            accessDesc.location.id = device;
-            accessDesc.flags = hipMemAccessFlagsProtReadWrite;
-            CURESULT_CHECK(hipMemSetAccess(d_mem, aligned_size, &accessDesc, 1));
-        }
-
-
-        static void cu_mem_unmap_and_release(hipDevice_t device,
-                                            size_t aligned_size,
-                                            hipDeviceptr_t d_mem,
-                                            const std::vector<hipMemGenericAllocationHandle_t>& allocHandles,
-                                            const std::vector<size_t>& chunk_sizes) {
-          
-            // Unmap each chunk
-            size_t deallocated_size = 0;
-            for (size_t i = 0; i < allocHandles.size(); ++i) {
-                void* map_addr = (void*)((uintptr_t)d_mem + deallocated_size);
-                CURESULT_CHECK(hipMemUnmap((hipDeviceptr_t)map_addr, chunk_sizes[i]));
-                deallocated_size += chunk_sizes[i];
-#ifdef TMS_DEBUG_LOG
-                std::cout << "[torch_memory_saver.cpp] unmapped chunk " << i << " at offset " << deallocated_size - chunk_sizes[i] << std::endl;
-#endif
-            }
-
-            // Release each handle
-            for (size_t i = 0; i < allocHandles.size(); ++i) {
-                CURESULT_CHECK(hipMemRelease(allocHandles[i]));
-#ifdef TMS_DEBUG_LOG
-                std::cout << "[torch_memory_saver.cpp] released allocHandles[" << i << "]" << std::endl;
-#endif
-            }
-        }
-
-        #endif // TMS_ROCM_LEGACY_CHUNKED
     #endif
 
 #elif defined(USE_CUDA)

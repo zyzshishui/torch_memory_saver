@@ -31,14 +31,14 @@ struct AllocationMetadata {
     CUmemGenericAllocationHandle allocHandle;
 #elif defined(USE_ROCM)
     size_t aligned_size;
-    #if TMS_ROCM_LEGACY_CHUNKED
+#if TMS_ROCM_LEGACY_CHUNKED
     // ROCm 6.x: Chunked allocation workaround for hipMemCreate bug
     std::vector<hipMemGenericAllocationHandle_t> allocHandles;
     std::vector<size_t> chunk_sizes;
-    #else
+#else
     // ROCm 7.0+: Single allocation handle like CUDA
     hipMemGenericAllocationHandle_t allocHandle;
-    #endif
+#endif
 #else
     #error "USE_PLATFORM is not set"
 #endif

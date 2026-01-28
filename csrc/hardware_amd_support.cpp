@@ -338,6 +338,8 @@ namespace ROCmHIPImplementation {
             if (metadata.enable_cpu_backup) {
                 SIMPLE_CHECK(metadata.cpu_backup != nullptr, "cpu_backup should not be nullptr");
                 CUDA_ERROR_CHECK(cudaMemcpy(ptr, metadata.cpu_backup, metadata.aligned_size, hipMemcpyHostToDevice));
+                CUDA_ERROR_CHECK(hipFreeHost(metadata.cpu_backup));
+                metadata.cpu_backup = nullptr;
             }
 
             metadata.state = AllocationState::ACTIVE;
