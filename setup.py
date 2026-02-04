@@ -95,9 +95,6 @@ def _create_ext_modules(platform):
     platform_home = Path(_find_platform_home(platform))
     
     if platform == "hip":
-        # Add ROCm-specific source file
-        sources.append('csrc/hardware_amd_support.cpp')
-        
         include_dirs = [str(platform_home.resolve() / 'include')]
         library_dirs = [str(platform_home.resolve() / 'lib')]
         libraries = ['amdhip64', 'dl']

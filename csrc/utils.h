@@ -1,6 +1,6 @@
 #pragma once
 #include <iostream>
-#include <vector> 
+#include <vector>
 #include "macro.h"
 
 // #define TMS_DEBUG_LOG
@@ -53,7 +53,6 @@
   } while (false)
 
 
-
 namespace CUDAUtils {
 #if defined(USE_ROCM)
 
@@ -65,10 +64,6 @@ namespace CUDAUtils {
         #else
             #pragma message "Using ROCm/HIP >= 7.0 implementation (single allocation, same as CUDA)"
         #endif
-
-        // =============================================================================
-        // ROCm common utilities
-        // =============================================================================
 
         static CUdevice cu_ctx_get_device() {
             int device;
@@ -82,11 +77,7 @@ namespace CUDAUtils {
             return ans;
         }
 
-        // =============================================================================
-        // ROCm 7.0+: Single allocation (same as CUDA)
-        // =============================================================================
-
-        static cudaError_t cu_mem_create(hipMemGenericAllocationHandle_t *alloc_handle, size_t size, hipDevice_t device) {
+        static cudaError_t cu_mem_create(CUmemGenericAllocationHandle *alloc_handle, size_t size, CUdevice device) {
             hipMemAllocationProp prop = {};
             prop.type = hipMemAllocationTypePinned;
             prop.location.type = hipMemLocationTypeDevice;
@@ -103,7 +94,7 @@ namespace CUDAUtils {
             return hipSuccess;
         }
 
-        static void cu_mem_set_access(void *ptr, size_t size, hipDevice_t device) {
+        static void cu_mem_set_access(void *ptr, size_t size, CUdevice device) {
             hipMemAccessDesc accessDesc = {};
             accessDesc.location.type = hipMemLocationTypeDevice;
             accessDesc.location.id = device;
