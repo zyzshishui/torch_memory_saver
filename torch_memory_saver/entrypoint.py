@@ -118,7 +118,10 @@ class _TorchMemorySaverImpl:
         self._binary_wrapper = BinaryWrapper(path_binary=self._hook_util.get_path_binary())
         self._mem_pools = defaultdict(lambda: torch.cuda.MemPool(allocator=self._hook_util.get_allocator()))
         _sanity_checks()
-        # Register for cleanup at exit (needed for ROCm/HIP to avoid crash during MemPool destruction)
+        # Unlike CUDA where cuMem* are Driver API calls, HIP puts everything in user-space libraries
+        # whose C++ static destructors may run before MemPool's destructor during process exit ("static 
+        # destruction order fiasco"). By clearing _mem_pools in an atexit handler, we ensure MemPool 
+        # destruction (and thus HIP API calls) happens while the HIP/HSA runtime is still fully alive.
         _instances_to_cleanup.add(self)
 
     @contextmanager
