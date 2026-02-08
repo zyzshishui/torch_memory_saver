@@ -1,8 +1,6 @@
 #pragma once
 
-// Define platform macros and include appropriate headers
 #if defined(USE_ROCM)
-// Include HIP runtime headers for AMD ROCm platform
 #include <hip/hip_runtime_api.h>
 #include <hip/hip_runtime.h>
 #include <sstream>
@@ -23,32 +21,50 @@
 #define cuGetErrorString hipDrvGetErrorString
 #define cudaGetErrorString hipGetErrorString
 // --- Memory Management Functions ---
+#define CUdeviceptr hipDeviceptr_t
 #define cuMemGetAllocationGranularity hipMemGetAllocationGranularity
+#define cuMemAddressReserve hipMemAddressReserve
+#define cuMemAddressFree hipMemAddressFree
+#define cuMemMap hipMemMap
 #define cuMemUnmap hipMemUnmap
 #define cuMemRelease hipMemRelease
+#define cudaMalloc hipMalloc
+#define cudaFree hipFree
 #define cudaMallocHost hipHostMalloc
+#define cudaFreeHost hipFreeHost
 #define cudaMemcpy hipMemcpy
+#define cudaMemGetInfo hipMemGetInfo
+#define cudaDeviceSynchronize hipDeviceSynchronize
 // --- Memory Copy Direction Constants ---
 #define cudaMemcpyDeviceToHost hipMemcpyDeviceToHost
+#define cudaMemcpyHostToDevice hipMemcpyHostToDevice
 // --- Device and Stream Types ---
 #define CUdevice hipDevice_t
 #define cudaStream_t hipStream_t
-// --- Memory Allocation Constants ---
-// Chunk size for memory creation operations (2 MB)
+// --- Error codes ---
+#define cudaErrorMemoryAllocation hipErrorOutOfMemory
+// --- Memory Allocation Handle ---
+#define CUmemGenericAllocationHandle hipMemGenericAllocationHandle_t
+// --- Chunk size for memory creation operations (2 MB) ---
 #define MEMCREATE_CHUNK_SIZE (2 * 1024 * 1024)
 // --- Utility Macros ---
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 
-// ============================================================================
-// CUDA Platform Configuration (NVIDIA GPUs)
-// ============================================================================
+// --- ROCm Version Feature Flags ---
+// ROCm 6.x has hipMemCreate bug, requires chunked allocation workaround
+// ROCm 7.0+ has fixed the bug, can use non-chunked allocation like CUDA
+#if HIP_VERSION < 70000000
+    #define TMS_ROCM_LEGACY_CHUNKED 1
+#else
+    #define TMS_ROCM_LEGACY_CHUNKED 0
+#endif
+
 #elif defined(USE_CUDA)
 #include <cuda_runtime_api.h>
 #include <cuda.h>
 
-// ============================================================================
-// Error: No Platform Specified
-// ============================================================================
+#define TMS_ROCM_LEGACY_CHUNKED 0
+
 #else
 #error "USE_PLATFORM is not set"
 #endif

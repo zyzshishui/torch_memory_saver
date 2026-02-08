@@ -1,4 +1,6 @@
+import atexit
 import ctypes
+import weakref
 
 import numpy as np
 import logging
@@ -14,6 +16,22 @@ from .hooks.base import HookUtilBase, HookMode
 logger = logging.getLogger(__name__)
 
 _TAG_DEFAULT = "default"
+
+# Global set to track instances that need cleanup
+_instances_to_cleanup = weakref.WeakSet()
+
+
+def _cleanup_at_exit():
+    """Clean up MemPools before Python exits to avoid issues with ROCm/HIP."""
+    for impl in list(_instances_to_cleanup):
+        try:
+            if hasattr(impl, '_mem_pools'):
+                impl._mem_pools.clear()
+        except Exception:
+            pass
+
+
+atexit.register(_cleanup_at_exit)
 
 
 class TorchMemorySaver:
@@ -100,6 +118,11 @@ class _TorchMemorySaverImpl:
         self._binary_wrapper = BinaryWrapper(path_binary=self._hook_util.get_path_binary())
         self._mem_pools = defaultdict(lambda: torch.cuda.MemPool(allocator=self._hook_util.get_allocator()))
         _sanity_checks()
+        # Unlike CUDA where cuMem* are Driver API calls, HIP puts everything in user-space libraries
+        # whose C++ static destructors may run before MemPool's destructor during process exit ("static 
+        # destruction order fiasco"). By clearing _mem_pools in an atexit handler, we ensure MemPool 
+        # destruction (and thus HIP API calls) happens while the HIP/HSA runtime is still fully alive.
+        _instances_to_cleanup.add(self)
 
     @contextmanager
     def region(self, tag: str, enable_cpu_backup: bool):

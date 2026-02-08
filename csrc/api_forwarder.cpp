@@ -20,7 +20,11 @@ namespace APIForwarder {
 
     cudaError_t call_real_cuda_malloc(void **ptr, size_t size) {
         if (C10_UNLIKELY(nullptr == real_cuda_malloc_)) {
+#if defined(USE_ROCM)
+            real_cuda_malloc_ = (CudaMallocFunc) check_dlsym(dlsym(RTLD_NEXT, "hipMalloc"));
+#else
             real_cuda_malloc_ = (CudaMallocFunc) check_dlsym(dlsym(RTLD_NEXT, "cudaMalloc"));
+#endif
         }
 
         cudaError_t ret = real_cuda_malloc_(ptr, size);
@@ -36,7 +40,11 @@ namespace APIForwarder {
 
     cudaError_t call_real_cuda_free(void *ptr) {
         if (C10_UNLIKELY(nullptr == real_cuda_free_)) {
+#if defined(USE_ROCM)
+            real_cuda_free_ = (CudaFreeFunc) check_dlsym(dlsym(RTLD_NEXT, "hipFree"));
+#else
             real_cuda_free_ = (CudaFreeFunc) check_dlsym(dlsym(RTLD_NEXT, "cudaFree"));
+#endif
         }
 
         cudaError_t ret = real_cuda_free_(ptr);
