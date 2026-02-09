@@ -1,14 +1,11 @@
 #include "hardware_amd_support.h"
 #include "core.h"
 
-#if defined(USE_ROCM)
+#if TMS_ROCM_LEGACY_CHUNKED
 
 #include <iostream>
 
-#if HIP_VERSION < 60304000
-    #pragma message "You need to implement torch_memory_saver in ROCm/HIP 6.3.4 or lower. We did not support it currently."
-#else
-    #pragma message "Using ROCm/HIP >= 6.4.2 implementation"
+#pragma message "Using ROCm/HIP 6.x implementation (chunked allocation workaround)"
 
 namespace DeviceUtils {
     int get_global_device_id(hipDevice_t local_device_id) {
@@ -139,9 +136,6 @@ namespace ROCmHIPImplementation {
         std::unordered_map<void*, AllocationMetadata>& allocation_metadata,
         std::mutex& allocator_metadata_mutex
     ) {
-        // Get device
-        CURESULT_CHECK(hipCtxGetDevice(&device));
-
         // Calculate aligned size
         hipMemAllocationProp prop = {};
         prop.type = hipMemAllocationTypePinned;
@@ -340,6 +334,4 @@ namespace ROCmHIPImplementation {
     }
 }
 
-#endif // HIP_VERSION
-
-#endif // USE_ROCM
+#endif // TMS_ROCM_LEGACY_CHUNKED

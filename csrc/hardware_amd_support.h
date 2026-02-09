@@ -8,7 +8,7 @@
 #include <unordered_map>
 #include <mutex>
 
-#if defined(USE_ROCM)
+#if TMS_ROCM_LEGACY_CHUNKED
 
 // Forward declaration
 enum class AllocationState;
@@ -55,4 +55,4 @@ namespace ROCmHIPImplementation {
     );
 }
 
-#endif // USE_ROCM
+#endif // TMS_ROCM_LEGACY_CHUNKED

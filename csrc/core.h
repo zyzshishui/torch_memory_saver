@@ -5,10 +5,11 @@
 #include <atomic>
 #include <mutex>
 #include <string>
+#include <vector>
 #include "utils.h"
 #include "macro.h"
 
-#if defined(USE_ROCM)
+#if TMS_ROCM_LEGACY_CHUNKED
 #include "hardware_amd_support.h"
 #endif
 
@@ -27,14 +28,14 @@ struct AllocationMetadata {
     bool enable_cpu_backup;
     void* cpu_backup;
 
-#if defined(USE_CUDA)
-    CUmemGenericAllocationHandle allocHandle;
-#elif defined(USE_ROCM)
+#if TMS_ROCM_LEGACY_CHUNKED
+    // ROCm 6.x: Chunked allocation workaround
     size_t aligned_size;
-    std::vector<hipMemGenericAllocationHandle_t> allocHandles;
+    std::vector<CUmemGenericAllocationHandle> allocHandles;
     std::vector<size_t> chunk_sizes;
 #else
-    #error "USE_PLATFORM is not set"
+    // CUDA and ROCm 7.0+: Single allocation handle
+    CUmemGenericAllocationHandle allocHandle;
 #endif
 };
 
@@ -43,7 +44,7 @@ public:
     static TorchMemorySaver& instance();
 
     cudaError_t malloc(void** ptr, CUdevice device, size_t size, const std::string& tag, bool enable_cpu_backup);
-    cudaError_t free(void* ptr);
+    cudaError_t free(void *ptr);
 
     void pause(const std::string& tag);
     void resume(const std::string& tag);

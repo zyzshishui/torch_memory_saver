@@ -7,6 +7,14 @@ namespace APIForwarder {
     using CudaMallocFunc = cudaError_t (*)(void**, size_t);
     using CudaFreeFunc = cudaError_t (*)(void*);
 
+#if defined(USE_ROCM)
+    static constexpr const char* MALLOC_NAME = "hipMalloc";
+    static constexpr const char* FREE_NAME = "hipFree";
+#else
+    static constexpr const char* MALLOC_NAME = "cudaMalloc";
+    static constexpr const char* FREE_NAME = "cudaFree";
+#endif
+
     static void *check_dlsym(void *value) {
         if (nullptr == value) {
             std::cerr << "[torch_memory_saver.cpp] dlsym failed dlerror=" << dlerror() << std::endl;
@@ -20,7 +28,7 @@ namespace APIForwarder {
 
     cudaError_t call_real_cuda_malloc(void **ptr, size_t size) {
         if (C10_UNLIKELY(nullptr == real_cuda_malloc_)) {
-            real_cuda_malloc_ = (CudaMallocFunc) check_dlsym(dlsym(RTLD_NEXT, "cudaMalloc"));
+            real_cuda_malloc_ = (CudaMallocFunc) check_dlsym(dlsym(RTLD_NEXT, MALLOC_NAME));
         }
 
         cudaError_t ret = real_cuda_malloc_(ptr, size);
@@ -36,7 +44,7 @@ namespace APIForwarder {
 
     cudaError_t call_real_cuda_free(void *ptr) {
         if (C10_UNLIKELY(nullptr == real_cuda_free_)) {
-            real_cuda_free_ = (CudaFreeFunc) check_dlsym(dlsym(RTLD_NEXT, "cudaFree"));
+            real_cuda_free_ = (CudaFreeFunc) check_dlsym(dlsym(RTLD_NEXT, FREE_NAME));
         }
 
         cudaError_t ret = real_cuda_free_(ptr);
