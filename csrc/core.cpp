@@ -37,7 +37,7 @@ cudaError_t TorchMemorySaver::malloc(void **ptr, CUdevice device, size_t size, c
     }
 
     CURESULT_CHECK(cuMemAddressReserve((CUdeviceptr *) ptr, size, 0, 0, 0));
-    CURESULT_CHECK(cuMemMap((CUdeviceptr) *ptr, size, 0, allocHandle, 0));
+    CURESULT_CHECK(cuMemMap((CUdeviceptr) * ptr, size, 0, allocHandle, 0));
     CUDAUtils::cu_mem_set_access(*ptr, size, device);
 
     {
