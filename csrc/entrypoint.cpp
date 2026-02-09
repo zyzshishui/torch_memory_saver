@@ -74,7 +74,6 @@ void tms_torch_free(void *ptr, ssize_t ssize, int device, cudaStream_t stream) {
 #ifdef TMS_DEBUG_LOG
     std::cout << "[torch_memory_saver.cpp] entrypoint::tms_torch_free "
               << " ptr=" << ptr << " ssize=" << ssize << " device=" << device << " stream=" << stream
-              << " interesting_region=" << thread_local_config.is_interesting_region()
               << std::endl;
 #endif
     SIMPLE_CHECK(thread_local_config.is_interesting_region(), "only support interesting region");

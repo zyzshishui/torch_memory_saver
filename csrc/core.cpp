@@ -11,6 +11,10 @@ TorchMemorySaver &TorchMemorySaver::instance() {
 }
 
 cudaError_t TorchMemorySaver::malloc(void **ptr, CUdevice device, size_t size, const std::string& tag, const bool enable_cpu_backup) {
+#if TMS_ROCM_LEGACY_CHUNKED
+    return ROCmHIPImplementation::rocm_malloc(ptr, device, size, tag, enable_cpu_backup, allocation_metadata_, allocator_metadata_mutex_);
+
+#else
     const uint64_t memory_margin_bytes = memory_margin_bytes_.load();
     if (memory_margin_bytes > 0) {
         size_t free_bytes, total_bytes;
@@ -51,10 +55,15 @@ cudaError_t TorchMemorySaver::malloc(void **ptr, CUdevice device, size_t size, c
               << std::endl;
 #endif
 
+#endif
     return cudaSuccess;
 }
 
 cudaError_t TorchMemorySaver::free(void *ptr) {
+#if TMS_ROCM_LEGACY_CHUNKED
+    return ROCmHIPImplementation::rocm_free(ptr, allocation_metadata_, allocator_metadata_mutex_);
+
+#else
     AllocationMetadata metadata;
     {
         const std::lock_guard <std::mutex> lock(allocator_metadata_mutex_);
@@ -62,7 +71,7 @@ cudaError_t TorchMemorySaver::free(void *ptr) {
             return APIForwarder::call_real_cuda_free(ptr);
         }
 
-        metadata = std::move(allocation_metadata_[ptr]);
+        metadata = allocation_metadata_[ptr];
         allocation_metadata_.erase(ptr);
     }
 
@@ -80,14 +89,19 @@ cudaError_t TorchMemorySaver::free(void *ptr) {
 #ifdef TMS_DEBUG_LOG
     std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.free "
               << " ptr=" << ptr << " metadata.size=" << metadata.size
-              << " tag=" << metadata.tag
+              << " metadata.allocHandle=" << metadata.allocHandle << " tag=" << metadata.tag
               << std::endl;
 #endif
 
+#endif
     return cudaSuccess;
 }
 
 void TorchMemorySaver::pause(const std::string& tag) {
+#if TMS_ROCM_LEGACY_CHUNKED
+    ROCmHIPImplementation::rocm_pause(tag, allocation_metadata_, allocator_metadata_mutex_);
+
+#else
     const std::lock_guard <std::mutex> lock(allocator_metadata_mutex_);
 
     for (auto it = allocation_metadata_.begin(); it != allocation_metadata_.end(); ++it) {
@@ -107,12 +121,12 @@ void TorchMemorySaver::pause(const std::string& tag) {
         }
 
         if (metadata.enable_cpu_backup) {
-            size_t backup_size = metadata.size;
             if (nullptr == metadata.cpu_backup) {
-                CUDA_ERROR_CHECK(cudaMallocHost(&metadata.cpu_backup, backup_size));
+                CUDA_ERROR_CHECK(cudaMallocHost(&metadata.cpu_backup, metadata.size));
             }
             SIMPLE_CHECK(metadata.cpu_backup != nullptr, "cpu_backup should not be nullptr");
-            CUDA_ERROR_CHECK(cudaMemcpy(metadata.cpu_backup, ptr, backup_size, cudaMemcpyDeviceToHost));
+            // TODO may use cudaMemcpyAsync if needed
+            CUDA_ERROR_CHECK(cudaMemcpy(metadata.cpu_backup, ptr, metadata.size, cudaMemcpyDeviceToHost));
         }
 
         CURESULT_CHECK(cuMemUnmap((CUdeviceptr) ptr, metadata.size));
@@ -122,15 +136,20 @@ void TorchMemorySaver::pause(const std::string& tag) {
 
 #ifdef TMS_DEBUG_LOG
         std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.pause"
-                  << " ptr=" << ptr << " metadata.size=" << metadata.size
-                  << " tag=" << metadata.tag << " filter_tag=" << tag
+                  << " ptr=" << ptr << " metadata.size=" << metadata.size << " metadata.allocHandle="
+                  << metadata.allocHandle << " tag=" << metadata.tag << " filter_tag=" << tag
                   << " metadata.enable_cpu_backup=" << metadata.enable_cpu_backup
                   << std::endl;
 #endif
     }
+#endif
 }
 
 void TorchMemorySaver::resume(const std::string& tag) {
+#if TMS_ROCM_LEGACY_CHUNKED
+    ROCmHIPImplementation::rocm_resume(tag, allocation_metadata_, allocator_metadata_mutex_);
+
+#else
     const std::lock_guard <std::mutex> lock(allocator_metadata_mutex_);
 
     for (auto it = allocation_metadata_.begin(); it != allocation_metadata_.end(); ++it) {
@@ -157,18 +176,21 @@ void TorchMemorySaver::resume(const std::string& tag) {
         CUDAUtils::cu_mem_set_access(ptr, metadata.size, metadata.device);
 
         if (metadata.enable_cpu_backup) {
-            size_t backup_size = metadata.size;
             SIMPLE_CHECK(metadata.cpu_backup != nullptr, "cpu_backup should not be nullptr");
-            CUDA_ERROR_CHECK(cudaMemcpy(ptr, metadata.cpu_backup, backup_size, cudaMemcpyHostToDevice));
+            // TODO may use cudaMemcpyAsync if needed
+            CUDA_ERROR_CHECK(cudaMemcpy(ptr, metadata.cpu_backup, metadata.size, cudaMemcpyHostToDevice));
 
+            // TODO may provide a flag to choose whether to free immediately
+            // (users may want to lazily free to reduce re-alloc time)
             CUDA_ERROR_CHECK(cudaFreeHost(metadata.cpu_backup));
             metadata.cpu_backup = nullptr;
         }
 
 #ifdef TMS_DEBUG_LOG
         std::cout << "[torch_memory_saver.cpp] TorchMemorySaver.resume"
-                  << " ptr=" << ptr << " metadata.size=" << metadata.size
-                  << " tag=" << metadata.tag << " filter_tag=" << tag
+                  << " ptr=" << ptr << " metadata.size=" << metadata.size << " (old)metadata.allocHandle="
+                  << metadata.allocHandle
+                  << " (new)newAllocHandle=" << newAllocHandle << " tag=" << metadata.tag << " filter_tag=" << tag
                   << " metadata.enable_cpu_backup=" << metadata.enable_cpu_backup
                   << std::endl;
 #endif
@@ -176,6 +198,7 @@ void TorchMemorySaver::resume(const std::string& tag) {
         metadata.state = AllocationState::ACTIVE;
         metadata.allocHandle = newAllocHandle;
     }
+#endif
 }
 
 uint8_t* TorchMemorySaver::get_cpu_backup_pointer(const uint8_t* query_gpu_ptr, uint64_t query_size) {
@@ -185,7 +208,11 @@ uint8_t* TorchMemorySaver::get_cpu_backup_pointer(const uint8_t* query_gpu_ptr, 
         uint8_t *ptr = (uint8_t*) it->first;
         AllocationMetadata &metadata = it->second;
 
+#if TMS_ROCM_LEGACY_CHUNKED
+        size_t total_size = metadata.aligned_size;
+#else
         size_t total_size = metadata.size;
+#endif
 
         if ((ptr <= query_gpu_ptr) && (query_gpu_ptr + query_size <= ptr + total_size)) {
             const size_t offset = query_gpu_ptr - ptr;

@@ -9,6 +9,10 @@
 #include "utils.h"
 #include "macro.h"
 
+#if TMS_ROCM_LEGACY_CHUNKED
+#include "hardware_amd_support.h"
+#endif
+
 enum class AllocationState {
     // Memory is mapped and accessible
     ACTIVE,

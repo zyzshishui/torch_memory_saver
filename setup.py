@@ -81,6 +81,7 @@ def _create_ext_modules(platform):
     # Common sources for all extensions
     sources = [
         'csrc/api_forwarder.cpp',
+        'csrc/core.cpp',
         'csrc/entrypoint.cpp',
     ]
     
@@ -94,13 +95,13 @@ def _create_ext_modules(platform):
     platform_home = Path(_find_platform_home(platform))
     
     if platform == "hip":
-        sources.append('csrc/core_rocm.cpp')
+        # Add ROCm-specific source file for legacy chunked allocation (ROCm 6.x)
+        sources.append('csrc/hardware_amd_support.cpp')
         include_dirs = [str(platform_home.resolve() / 'include')]
         library_dirs = [str(platform_home.resolve() / 'lib')]
         libraries = ['amdhip64', 'dl']
         platform_macros = [('USE_ROCM', '1'), ('__HIP_PLATFORM_AMD__', '1')]
     else:  # cuda
-        sources.append('csrc/core.cpp')
         include_dirs = [str((platform_home / 'include').resolve())]
         library_dirs = [
             str((platform_home / 'lib64').resolve()),
