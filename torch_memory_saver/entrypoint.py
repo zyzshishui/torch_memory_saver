@@ -122,7 +122,7 @@ class _TorchMemorySaverImpl:
         # whose C++ static destructors may run before MemPool's destructor during process exit ("static 
         # destruction order fiasco"). By clearing _mem_pools in an atexit handler, we ensure MemPool 
         # destruction (and thus HIP API calls) happens while the HIP/HSA runtime is still fully alive.
-        _instances_to_cleanup.add(self)
+        atexit.register(self._mem_pools.clear)
 
     @contextmanager
     def region(self, tag: str, enable_cpu_backup: bool):
