@@ -77,8 +77,7 @@ void tms_torch_free(void *ptr, ssize_t ssize, int device, cudaStream_t stream) {
               << " interesting_region=" << thread_local_config.is_interesting_region()
               << std::endl;
 #endif
-    // Note: Don't check is_interesting_region() here because MemPool destructor
-    // may call free after the region has ended (e.g., during program exit)
+    SIMPLE_CHECK(thread_local_config.is_interesting_region(), "only support interesting region");
     CUDA_ERROR_CHECK(TorchMemorySaver::instance().free(ptr));
 }
 }
