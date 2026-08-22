@@ -193,6 +193,8 @@ cudaError_t TorchMemorySaver::pause(const std::string& tag) {
             disk_backend_.offload(ptr, metadata.raw_size, metadata.disk);
         }
 
+        // In-flight device work may still reference this virtual address.
+        CUDA_ERROR_CHECK(cudaDeviceSynchronize());
         CURESULT_CHECK(cuMemUnmap((CUdeviceptr) ptr, metadata.allocation_size));
         CURESULT_CHECK(cuMemRelease(metadata.allocHandle));
 

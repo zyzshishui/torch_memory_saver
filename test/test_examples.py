@@ -21,6 +21,7 @@ from examples import (
     multi_device_torch_mode,
     training_engine,
     nested_region,
+    pause_drain,
     xpu_scenarios,
 )
 
@@ -184,6 +185,16 @@ def test_training_engine():
 def test_cuda_vmm_granularity():
     with change_env("TMS_INIT_ENABLE", "1"):
         _test_core(cuda_vmm_granularity.run, hook_mode="preload")
+
+
+@_skip_on_xpu
+@pytest.mark.skipif(
+    not torch.cuda.is_available() or torch.version.hip is not None,
+    reason="In-flight VMM unmap regression test is CUDA-only",
+)
+@pytest.mark.parametrize("hook_mode", _HOOK_MODES)
+def test_pause_waits_for_inflight_work(hook_mode):
+    _test_core(pause_drain.run, hook_mode=hook_mode)
 
 
 @_skip_on_xpu
